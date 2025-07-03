@@ -6,3 +6,19 @@ channel = "stable-24_05"
 
 [deployment]
 run = ["sh", "-c", "npm run dev"]
+
+[workflows]
+runButton = "Backend Dev"
+
+[[workflows.workflow]]
+name = "Backend Dev"
+author = 44553603
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd backend && npm install && npm run dev"
+
+[[ports]]
+localPort = 3000
+externalPort = 80
