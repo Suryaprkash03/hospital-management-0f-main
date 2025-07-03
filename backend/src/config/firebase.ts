@@ -1,37 +1,83 @@
+
 import admin from 'firebase-admin';
 
 // Mock Firebase setup for development without credentials
 let db: FirebaseFirestore.Firestore;
 let auth: admin.auth.Auth;
 
-if (process.env.NODE_ENV === 'development' && !process.env.FIREBASE_PROJECT_ID) {
+if (process.env.NODE_ENV === 'development' && !process.env.FIREBASE_PRIVATE_KEY) {
+  console.log('🔥 Running in development mode with mock Firebase');
+  
   // Mock Firestore for development
   db = {
     collection: (name: string) => ({
-      add: async (data: any) => ({ id: `mock_${Date.now()}` }),
+      add: async (data: any) => {
+        console.log(`Mock Firestore: Adding to ${name}:`, data);
+        return { id: `mock_${Date.now()}` };
+      },
       doc: (id: string) => ({
-        get: async () => ({ exists: false, id, data: () => null }),
-        update: async () => {},
-        delete: async () => {},
+        get: async () => {
+          console.log(`Mock Firestore: Getting doc ${id} from ${name}`);
+          return { 
+            exists: true, 
+            id, 
+            data: () => ({ id, name: 'Mock User', email: 'mock@example.com' })
+          };
+        },
+        update: async (data: any) => {
+          console.log(`Mock Firestore: Updating doc ${id} in ${name}:`, data);
+        },
+        delete: async () => {
+          console.log(`Mock Firestore: Deleting doc ${id} from ${name}`);
+        },
+        set: async (data: any) => {
+          console.log(`Mock Firestore: Setting doc ${id} in ${name}:`, data);
+        }
       }),
       where: () => ({
-        limit: () => ({
-          get: async () => ({ empty: true, docs: [] })
+        limit: (num: number) => ({
+          get: async () => {
+            console.log(`Mock Firestore: Query ${name} with limit ${num}`);
+            return { empty: false, docs: [{ id: 'mock1', data: () => ({}) }] };
+          }
         }),
-        get: async () => ({ empty: true, docs: [] })
+        get: async () => {
+          console.log(`Mock Firestore: Query ${name}`);
+          return { empty: false, docs: [{ id: 'mock1', data: () => ({}) }] };
+        }
       }),
       orderBy: () => ({
-        limit: () => ({
-          get: async () => ({ empty: true, docs: [] })
+        limit: (num: number) => ({
+          get: async () => {
+            console.log(`Mock Firestore: OrderBy query ${name} with limit ${num}`);
+            return { empty: false, docs: [{ id: 'mock1', data: () => ({}) }] };
+          }
         }),
-        get: async () => ({ empty: true, docs: [] })
+        get: async () => {
+          console.log(`Mock Firestore: OrderBy query ${name}`);
+          return { empty: false, docs: [{ id: 'mock1', data: () => ({}) }] };
+        }
       }),
-      get: async () => ({ empty: true, docs: [] })
+      get: async () => {
+        console.log(`Mock Firestore: Getting all docs from ${name}`);
+        return { empty: false, docs: [{ id: 'mock1', data: () => ({}) }] };
+      }
     })
   } as any;
 
   auth = {
-    createUser: async () => ({ uid: `mock_${Date.now()}` })
+    createUser: async (userData: any) => {
+      console.log('Mock Auth: Creating user:', userData);
+      return { uid: `mock_${Date.now()}` };
+    },
+    getUserByEmail: async (email: string) => {
+      console.log('Mock Auth: Getting user by email:', email);
+      return { uid: 'mock_user', email };
+    },
+    updateUser: async (uid: string, userData: any) => {
+      console.log('Mock Auth: Updating user:', uid, userData);
+      return { uid };
+    }
   } as any;
 } else {
   const serviceAccount = {
