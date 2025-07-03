@@ -11,6 +11,7 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
 import appointmentRoutes from './routes/appointments';
+import { healthRoutes } from './routes/health';
 
 // Import middleware
 import { errorHandler } from './middleware/errorHandler';
@@ -60,7 +61,8 @@ app.get('/health', (req, res) => {
   });
 });
 
-// API routes
+// Routes
+app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/appointments', appointmentRoutes);
