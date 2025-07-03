@@ -1,264 +1,156 @@
-
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
-import { AuthRequest } from '@/middleware/auth';
-import { ValidationError, UnauthorizedError } from '@/middleware/errorHandler';
-import { JWTPayload, ApiResponse } from '@/types';
-import { validateEmail, validatePassword } from '@/utils/validation';
+import { UserModel, User } from '../models/User';
+import { auth } from '../config/firebase';
 
-const prisma = new PrismaClient();
+export const register = async (req: Request, res: Response) => {
+  try {
+    const { firstName, lastName, email, password, role, ...otherData } = req.body;
 
-const generateToken = (payload: JWTPayload): string => {
-  return jwt.sign(payload, process.env.JWT_SECRET!, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d'
-  });
-};
-
-export const authController = {
-  async login(req: AuthRequest, res: Response) {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      throw new ValidationError('Email and password are required');
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
-      include: {
-        staffProfile: true,
-        patientProfile: true
-      }
-    });
-
-    if (!user || !user.isActive) {
-      throw new UnauthorizedError('Invalid credentials');
-    }
-
-    const isValidPassword = await bcrypt.compare(password, user.password);
-    if (!isValidPassword) {
-      throw new UnauthorizedError('Invalid credentials');
-    }
-
-    // Update login tracking
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        lastLogin: new Date(),
-        loginCount: user.loginCount + 1,
-        firstLogin: false
-      }
-    });
-
-    const token = generateToken({
-      userId: user.id,
-      email: user.email,
-      role: user.role
-    });
-
-    const response: ApiResponse = {
-      success: true,
-      data: {
-        token,
-        user: {
-          id: user.id,
-          email: user.email,
-          role: user.role,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          profileCompleted: user.profileCompleted,
-          mustChangePassword: user.mustChangePassword,
-          firstLogin: user.firstLogin,
-          staffProfile: user.staffProfile,
-          patientProfile: user.patientProfile
-        }
-      },
-      message: 'Login successful'
-    };
-
-    res.json(response);
-  },
-
-  async register(req: AuthRequest, res: Response) {
-    const { email, password, firstName, lastName, role, phone } = req.body;
-
-    if (!email || !password || !firstName || !lastName || !role) {
-      throw new ValidationError('All required fields must be provided');
-    }
-
-    if (!validateEmail(email)) {
-      throw new ValidationError('Invalid email format');
-    }
-
-    if (!validatePassword(password)) {
-      throw new ValidationError('Password must be at least 8 characters long');
-    }
-
-    const existingUser = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() }
-    });
-
+    // Check if user already exists
+    const existingUser = await UserModel.findByEmail(email);
     if (existingUser) {
-      throw new ValidationError('User with this email already exists');
+      return res.status(400).json({ message: 'User already exists' });
     }
 
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    const user = await prisma.user.create({
-      data: {
-        email: email.toLowerCase(),
-        password: hashedPassword,
+    // Create user in Firestore
+    const userId = await UserModel.create({
+      firstName,
+      lastName,
+      email,
+      password: hashedPassword,
+      role: role || 'patient',
+      isActive: true,
+      ...otherData
+    });
+
+    // Create user in Firebase Auth (optional for additional security)
+    try {
+      await auth.createUser({
+        uid: userId,
+        email,
+        password,
+        displayName: `${firstName} ${lastName}`,
+        disabled: false
+      });
+    } catch (authError) {
+      console.log('Firebase Auth user creation failed:', authError);
+      // Continue without Firebase Auth user
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId, email, role: role || 'patient' },
+      process.env.JWT_SECRET!,
+      { expiresIn: '24h' }
+    );
+
+    res.status(201).json({
+      message: 'User created successfully',
+      token,
+      user: {
+        id: userId,
         firstName,
         lastName,
-        phone,
-        role,
-        profileCompleted: false
+        email,
+        role: role || 'patient'
       }
     });
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ message: 'Server error during registration' });
+  }
+};
 
-    const token = generateToken({
-      userId: user.id,
-      email: user.email,
-      role: user.role
-    });
+export const login = async (req: Request, res: Response) => {
+  try {
+    const { email, password } = req.body;
 
-    const response: ApiResponse = {
-      success: true,
-      data: {
-        token,
-        user: {
-          id: user.id,
-          email: user.email,
-          role: user.role,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          profileCompleted: user.profileCompleted
-        }
-      },
-      message: 'Registration successful'
-    };
-
-    res.status(201).json(response);
-  },
-
-  async getProfile(req: AuthRequest, res: Response) {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user!.id },
-      include: {
-        staffProfile: true,
-        patientProfile: true
-      },
-      omit: { password: true }
-    });
-
-    const response: ApiResponse = {
-      success: true,
-      data: { user }
-    };
-
-    res.json(response);
-  },
-
-  async updateProfile(req: AuthRequest, res: Response) {
-    const { firstName, lastName, phone } = req.body;
-    const userId = req.user!.id;
-
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        firstName,
-        lastName,
-        phone,
-        profileCompleted: true
-      },
-      omit: { password: true }
-    });
-
-    const response: ApiResponse = {
-      success: true,
-      data: { user },
-      message: 'Profile updated successfully'
-    };
-
-    res.json(response);
-  },
-
-  async changePassword(req: AuthRequest, res: Response) {
-    const { currentPassword, newPassword } = req.body;
-    const userId = req.user!.id;
-
-    if (!currentPassword || !newPassword) {
-      throw new ValidationError('Current password and new password are required');
+    // Find user by email
+    const user = await UserModel.findByEmail(email);
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    if (!validatePassword(newPassword)) {
-      throw new ValidationError('New password must be at least 8 characters long');
+    // Check if user is active
+    if (!user.isActive) {
+      return res.status(400).json({ message: 'Account is deactivated' });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId }
-    });
-
-    const isValidPassword = await bcrypt.compare(currentPassword, user!.password);
-    if (!isValidPassword) {
-      throw new UnauthorizedError('Current password is incorrect');
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      process.env.JWT_SECRET!,
+      { expiresIn: '24h' }
+    );
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        password: hashedPassword,
-        mustChangePassword: false
+    res.json({
+      message: 'Login successful',
+      token,
+      user: {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: user.role
       }
     });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ message: 'Server error during login' });
+  }
+};
 
-    const response: ApiResponse = {
-      success: true,
-      message: 'Password changed successfully'
-    };
+export const getProfile = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.userId;
 
-    res.json(response);
-  },
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
 
-  async forgotPassword(req: AuthRequest, res: Response) {
-    // Implementation for password reset email
-    const response: ApiResponse = {
-      success: true,
-      message: 'Password reset email sent (if email exists)'
-    };
+    // Remove password from response
+    const { password, ...userProfile } = user;
+    res.json(userProfile);
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
 
-    res.json(response);
-  },
+export const updateProfile = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.userId;
+    const updates = req.body;
 
-  async resetPassword(req: AuthRequest, res: Response) {
-    // Implementation for password reset with token
-    const response: ApiResponse = {
-      success: true,
-      message: 'Password reset successful'
-    };
+    // Remove sensitive fields that shouldn't be updated via this endpoint
+    delete updates.password;
+    delete updates.email;
+    delete updates.role;
 
-    res.json(response);
-  },
+    await UserModel.update(userId, updates);
 
-  async refreshToken(req: AuthRequest, res: Response) {
-    // Implementation for token refresh
-    const response: ApiResponse = {
-      success: true,
-      message: 'Token refreshed successfully'
-    };
+    const updatedUser = await UserModel.findById(userId);
+    if (!updatedUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
 
-    res.json(response);
-  },
-
-  async logout(req: AuthRequest, res: Response) {
-    const response: ApiResponse = {
-      success: true,
-      message: 'Logged out successfully'
-    };
-
-    res.json(response);
+    // Remove password from response
+    const { password, ...userProfile } = updatedUser;
+    res.json({ message: 'Profile updated successfully', user: userProfile });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 };
